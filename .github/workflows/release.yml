@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: linux,   goarch: arm, goarm: "7" }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.24' }
+      - name: Build
+        env: { GOOS: "${{ matrix.goos }}", GOARCH: "${{ matrix.goarch }}", GOARM: "${{ matrix.goarm }}", CGO_ENABLED: "0" }
+        run: |
+          ARCH="$GOARCH"; [ -n "$GOARM" ] && ARCH="${GOARCH}v${GOARM}"
+          DIR="ipwatch_${GITHUB_REF_NAME}_${GOOS}_${ARCH}"
+          mkdir -p "$DIR"
+          go build -trimpath -ldflags "-s -w" -o "$DIR/ipwatch" .
+          cp README.md LICENSE "$DIR/"
+          tar -czf "$DIR.tar.gz" "$DIR"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipwatch-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm && format('-v{0}', matrix.goarm) || '' }}
+          path: ipwatch_*.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { merge-multiple: true, path: dist }
+      - name: Checksums
+        run: cd dist && sha256sum *.tar.gz > checksums.txt && cat checksums.txt
+      - name: Create GitHub Release
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ipwatch $GITHUB_REF_NAME" \
+            --generate-notes
